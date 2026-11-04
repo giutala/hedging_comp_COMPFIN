@@ -1,0 +1,67 @@
+# hedgelab — Brent Asian Collar: Calibration & Hedging LAB
+
+Computational Finance 2025/26 replication package. We price and hedge a **zero-cost Asian
+collar** on ICE Brent futures, averaging over February 2021. Its two legs are Apr21 (`COJ21`)
+and May21 (`COK21`). Out of sample, the same code runs on October 2022 (`COZ22` / `COF23`).
+
+The client is long `Call(78)` and short `Put(K_put)`. We act as market maker, so we are short
+the collar. `K_put` is solved so that the structure costs zero on **6 Jan 2020**. We then
+hedge it daily until 28 Feb 2021.
+
+## Quick start
+
+```bash
+# prerequisites: uv (https://docs.astral.sh/uv/), git
+uv sync                         # creates .venv with Python 3.12 + pinned deps from uv.lock
+cp .env.example .env            # optional: override paths / MC settings
+uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
+uv run hedgelab info            # smoke check: loads data, prints chain summary
+uv run pytest                   # unit tests
+```
+
+Optional Qt table viewer for raw data: `uv sync --extra gui`.
+
+## Data
+
+The course dataset is **not committed**. Put these files in `data/` (or point
+`HEDGELAB_DATA_DIR` elsewhere):
+
+| file | content |
+|---|---|
+| `unpivoted_bid_offer_train_clean.parquet` | Daily bid/ask/settle of Brent futures options. 27 chains, 6 Jan 2020 → 6 Apr 2021. Each row also carries the underlying future's settle and bid/ask, plus the overnight SOFR rate (in percent) |
+| `COJ21_COZ22_historical_series.xlsx` | Daily settle/bid/ask for COJ21 (to 26 Feb 2021) and COZ22 (to 31 Oct 2022). The option file stops at option expiry, so this sheet supplies the last fixing days |
+
+Course notes (`notes/*.pdf`) are also kept out of git.
+
+## Layout
+
+```
+src/hedgelab/        library code (one module per concern)
+  config.py          pydantic-settings, reads .env (HEDGELAB_* variables)
+  exceptions.py      domain exceptions (DataLoadError, LookAheadError, ...)
+  loaders.py         load + validate raw files, as-of filtering
+  checkpoints.py     pickled raw / parsed / validated stage checkpoints
+  log.py             rich logging setup
+  cli.py             `hedgelab` CLI (typer); one subcommand per pipeline phase
+tests/               pytest unit tests
+notebooks/           end-to-end phase notebooks, each asserting its numeric outputs
+scripts/             one-off utilities
+data/checkpoints/    generated stage pickles (git-ignored)
+outputs/             figures, SQLite results DB, report artefacts (git-ignored)
+```
+
+## Conventions
+
+- **Python 3.12 + uv**, with exact versions pinned in `uv.lock`. Run everything through `uv run`.
+- **Ruff** handles formatting and linting (PEP 8, NumPy docstrings, mandatory annotations).
+  **mypy --strict** handles types. Both run in pre-commit and in CI
+  (`.github/workflows/ci.yml`).
+- **Conventional commits** (`feat:`, `fix:`, `docs:`, ...). Commitizen enforces them through
+  the commit-msg hook.
+- **Temporal discipline.** Every pricing, calibration or hedging function takes an explicit
+  `as_of: date`. Its first step is `filter_as_of(...)`, so no function ever uses an implicit
+  "today".
+- **Invariants are enforced with `assert`**, for example `extrinsic >= 0`, the AM–GM bound
+  `Call_arith >= Call_geo`, and `payoff - premium == PnL`.
+- **Logging:** each module uses `logging.getLogger(__name__)`. Only the CLI or dashboards
+  print.
