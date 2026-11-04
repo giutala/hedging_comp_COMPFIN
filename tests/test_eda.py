@@ -15,7 +15,7 @@ from hedgelab.loaders import build_futures_panel
 def _synthetic_options() -> pd.DataFrame:
     """Two days of one clean chain priced by Black-76 and rounded to the tick."""
     rows = []
-    for d, F in ((pd.Timestamp("2020-01-06"), 61.4), (pd.Timestamp("2020-01-07"), 61.0)):
+    for d, F in ((pd.Timestamp("2020-01-06"), 61.4), (pd.Timestamp("2020-01-07"), 60.0)):
         expiry = pd.Timestamp("2021-02-23")
         days = (expiry - d).days
         for K in np.arange(45.0, 86.0, 5.0):
@@ -114,3 +114,31 @@ def test_ewma_correlation_of_identical_series_is_one() -> None:
     r = pd.DataFrame({"a": np.random.default_rng(0).normal(size=100)})
     r["b"] = r["a"]
     np.testing.assert_allclose(eda.ewma_correlation(r, "a", "b"), 1.0)
+
+
+def test_strike_holes_lists_missing_interior_strike() -> None:
+    opts = _synthetic_options()
+    opts = opts[~((opts["date"] == "2020-01-07") & (opts["strike"] == 60.0))]
+    holes = eda.strike_holes(opts)
+    assert len(holes) == 1
+    assert holes.loc[0, "missing_strikes"] == (60.0,)
+
+
+def test_frozen_quote_with_moving_chain_is_suspect() -> None:
+    opts = _synthetic_options()
+    ticker = "COJ1C 65.00 Comdty"
+    day0 = opts[(opts["date"] == "2020-01-06") & (opts["option_ticker"] == ticker)].iloc[0]
+    frozen = (opts["date"] == "2020-01-07") & (opts["option_ticker"] == ticker)
+    opts.loc[frozen, ["settlement_price", "option_bid", "option_ask"]] = day0[
+        ["settlement_price", "option_bid", "option_ask"]
+    ].to_numpy()
+    out = eda.frozen_quotes(eda.enrich_options(opts), min_expected_move=0.01)
+    assert list(out["option_ticker"]) == [ticker]
+    # the rest of the chain kept a flat 25% vol, so the frozen price implies a vol jump
+    assert bool(out.loc[0, "suspect"])
+
+
+def test_largest_moves_sorted_by_absolute_size() -> None:
+    r = pd.DataFrame({"X": [0.01, -0.05, 0.03]}, index=pd.date_range("2020-01-01", periods=3))
+    top = eda.largest_moves(r, "X", n=2)
+    assert list(top["log_return"]) == [-0.05, 0.03]
