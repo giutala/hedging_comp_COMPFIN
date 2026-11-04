@@ -63,6 +63,39 @@ def black76_price(
     return out
 
 
+def black76_delta(
+    forward: npt.ArrayLike,
+    strike: npt.ArrayLike,
+    tau: npt.ArrayLike,
+    sigma: npt.ArrayLike,
+    is_call: npt.ArrayLike,
+) -> FloatArray:
+    """Undiscounted Black-76 futures delta, dV/dF (vectorised).
+
+    Parameters
+    ----------
+    forward, strike, tau, sigma, is_call : array_like
+        As in :func:`black76_price`.
+
+    Returns
+    -------
+    FloatArray
+        ``N(d1)`` for calls and ``N(d1) - 1`` for puts.
+
+    Notes
+    -----
+    With futures-style margining the delta is not discounted, consistently with the
+    r = 0 price.
+    """
+    F = np.asarray(forward, dtype=float)
+    K = np.asarray(strike, dtype=float)
+    vol_sqrt_t = np.asarray(sigma, dtype=float) * np.sqrt(np.asarray(tau, dtype=float))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d1 = (np.log(F / K) + 0.5 * vol_sqrt_t**2) / vol_sqrt_t
+    out: FloatArray = np.where(np.asarray(is_call, dtype=bool), ndtr(d1), ndtr(d1) - 1.0)
+    return out
+
+
 def implied_vol(
     price: npt.ArrayLike,
     forward: npt.ArrayLike,
