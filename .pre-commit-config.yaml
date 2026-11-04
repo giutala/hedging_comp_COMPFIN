@@ -8,10 +8,6 @@ repos:
       - id: check-toml
       - id: check-added-large-files
         args: ["--maxkb=2000"]
-  - repo: https://github.com/kynan/nbstripout
-    rev: 0.8.1
-    hooks:
-      - id: nbstripout   # notebooks are committed without outputs; run them to see results
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: 0.9.3
     hooks:

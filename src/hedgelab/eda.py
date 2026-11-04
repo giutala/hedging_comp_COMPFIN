@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from hedgelab.black76 import implied_vol
+from hedgelab.black76 import black76_delta, implied_vol
 
 logger = logging.getLogger(__name__)
 
@@ -839,3 +839,174 @@ def summarise_returns(returns: pd.DataFrame) -> pd.DataFrame:
         "best_day": lambda s: float(s.to_numpy().max()),
     }
     return pd.DataFrame({k: returns.apply(f) for k, f in metrics.items()})
+
+
+# --------------------------------------------------------------------------- anomaly drill-downs
+
+
+def spread_column_mismatch(options: pd.DataFrame) -> pd.DataFrame:
+    """List (date, future) pairs whose ``underlying_spread`` differs from ``ask - bid``.
+
+    Parameters
+    ----------
+    options : pd.DataFrame
+        Raw option quotes.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per mismatching (date, future) with the stored and recomputed spread.
+
+    Notes
+    -----
+    The discrepancy is always exactly one tick, consistent with the vendor computing
+    the spread from unrounded bid/ask. The column is never used downstream.
+    """
+    fut = options.drop_duplicates(["date", "future_contract_code"]).copy()
+    fut["recomputed"] = fut["underlying_ask"] - fut["underlying_bid"]
+    fut["difference"] = (fut["underlying_spread"] - fut["recomputed"]).round(4)
+    cols = ["date", "future_contract_code", "underlying_bid", "underlying_ask"]
+    out = fut.loc[fut["difference"].abs() > 1e-6, [*cols, "underlying_spread", "recomputed"]]
+    return out.assign(difference=fut["difference"]).reset_index(drop=True)
+
+
+def zero_width_futures(panel: pd.DataFrame) -> pd.DataFrame:
+    """Return futures quotes with ``bid >= ask``.
+
+    Parameters
+    ----------
+    panel : pd.DataFrame
+        Futures panel.
+
+    Returns
+    -------
+    pd.DataFrame
+        Offending rows with their ``source``.
+    """
+    return panel.loc[panel["bid"] >= panel["ask"]].reset_index(drop=True)
+
+
+def strike_holes(options: pd.DataFrame) -> pd.DataFrame:
+    """List (date, chain) pairs with a missing interior strike on the 5-USD grid.
+
+    Parameters
+    ----------
+    options : pd.DataFrame
+        Raw option quotes.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns ``date, contract_code, missing_strikes`` (tuple of floats).
+    """
+    rows = []
+    for (d, code), k in options.groupby(["date", "contract_code"])["strike"]:
+        grid = np.arange(k.min(), k.max() + STRIKE_STEP / 2, STRIKE_STEP)
+        missing = tuple(float(x) for x in np.setdiff1d(grid, k.unique()))
+        if missing:
+            rows.append({"date": d, "contract_code": code, "missing_strikes": missing})
+    return pd.DataFrame(rows, columns=["date", "contract_code", "missing_strikes"])
+
+
+def non_invertible_quotes(enriched: pd.DataFrame) -> pd.DataFrame:
+    """Return OTM quotes whose bid or ask does not invert to a Black-76 vol.
+
+    Parameters
+    ----------
+    enriched : pd.DataFrame
+        Output of :func:`enrich_options`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Offending rows with price, forward and time to expiry.
+    """
+    otm = enriched[enriched["is_otm"] & enriched["option_bid"].notna()]
+    bad = otm[otm["iv_bid"].isna() | otm["iv_ask"].isna()]
+    cols = ["date", "option_ticker", "option_bid", "option_ask", "underlying_settlement", "tau"]
+    return bad[cols].reset_index(drop=True)
+
+
+def frozen_quotes(
+    enriched: pd.DataFrame, min_expected_move: float = 0.05, max_iv_gap_pts: float = 1.0
+) -> pd.DataFrame:
+    """Identify option quotes unchanged day-on-day although the future moved.
+
+    Parameters
+    ----------
+    enriched : pd.DataFrame
+        Output of :func:`enrich_options`.
+    min_expected_move : float, default 0.05
+        Report only quotes whose first-order expected move ``|delta * dF|`` exceeds
+        this amount (USD/bbl); smaller moves are within rounding of the tick.
+    max_iv_gap_pts : float, default 1.0
+        A frozen quote is flagged ``suspect`` when its implied-vol change differs from
+        the median change of its chain on the same day by more than this many vol points.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per frozen quote with ``expected_move``, ``d_iv`` (own IV change),
+        ``chain_d_iv`` (median OTM IV change of the chain) and ``suspect``.
+
+    Notes
+    -----
+    An unchanged price is not by itself an error: when the future moves, a
+    simultaneous vol move can leave the option price unchanged. That case shows up as
+    an implied-vol change in line with the rest of the chain. A quote whose implied vol
+    moves *differently* from its neighbours is more likely carried forward by the
+    data vendor, i.e. stale.
+    """
+    x = enriched.sort_values(["option_ticker", "date"]).copy()
+    by_ticker = x.groupby("option_ticker")
+    unchanged = (
+        (by_ticker["option_bid"].diff() == 0)
+        & (by_ticker["option_ask"].diff() == 0)
+        & (by_ticker["settlement_price"].diff() == 0)
+    )
+    x["d_forward"] = by_ticker["underlying_settlement"].diff()
+    x["d_iv"] = by_ticker["iv_settle"].diff()
+    prev_delta = black76_delta(
+        by_ticker["underlying_settlement"].shift(),
+        x["strike"],
+        by_ticker["tau"].shift(),
+        by_ticker["iv_settle"].shift(),
+        x["is_call"],
+    )
+    x["delta"] = prev_delta
+    x["expected_move"] = np.abs(prev_delta * x["d_forward"].to_numpy())
+
+    moving = x[x["is_otm"] & ~unchanged]
+    chain_d_iv = moving.groupby(["date", "contract_code"])["d_iv"].median().rename("chain_d_iv")
+    frozen = x[unchanged & (x["expected_move"] > min_expected_move)]
+    frozen = frozen.join(chain_d_iv, on=["date", "contract_code"])
+    frozen["iv_gap_pts"] = 100.0 * (frozen["d_iv"] - frozen["chain_d_iv"])
+    frozen["suspect"] = frozen["iv_gap_pts"].abs() > max_iv_gap_pts
+    cols = [
+        "date", "option_ticker", "contract_code", "option_bid", "option_ask",
+        "settlement_price", "underlying_settlement", "tau", "d_forward", "delta",
+        "expected_move", "d_iv", "chain_d_iv", "iv_gap_pts", "suspect",
+    ]  # fmt: skip
+    return frozen[cols].sort_values("date").reset_index(drop=True)
+
+
+def largest_moves(returns: pd.DataFrame, column: str, n: int = 6) -> pd.DataFrame:
+    """Return the ``n`` largest absolute daily log-returns of one contract.
+
+    Parameters
+    ----------
+    returns : pd.DataFrame
+        Daily log-returns.
+    column : str
+        Contract code.
+    n : int, default 6
+        Number of rows.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns ``date, log_return`` sorted by absolute size, largest first.
+    """
+    r = returns[column]
+    top = r.loc[r.abs().sort_values(ascending=False).index[:n]]
+    return top.rename("log_return").rename_axis("date").reset_index()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from hedgelab.black76 import black76_price, implied_vol
+from hedgelab.black76 import black76_delta, black76_price, implied_vol
 
 
 @pytest.mark.parametrize("is_call", [True, False])
@@ -49,3 +49,14 @@ def test_implied_vol_out_of_bounds_is_nan() -> None:
         [4.0, 70.0, 1.0], [60.0, 60.0, 60.0], [55.0, 55.0, 60.0], [1.0, 1.0, 0.0], True
     )
     assert np.isnan(iv).all()
+
+
+@pytest.mark.parametrize("is_call", [True, False])
+def test_delta_matches_finite_difference(is_call: bool) -> None:
+    K = np.array([45.0, 60.0, 80.0])
+    h = 1e-4
+    up = black76_price(60.0 + h, K, 0.8, 0.3, is_call)
+    dn = black76_price(60.0 - h, K, 0.8, 0.3, is_call)
+    np.testing.assert_allclose(
+        black76_delta(60.0, K, 0.8, 0.3, is_call), (up - dn) / (2 * h), atol=1e-7
+    )

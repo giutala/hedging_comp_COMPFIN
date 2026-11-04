@@ -125,9 +125,9 @@ def run_eda(settings: Settings) -> EdaResult:
         ),
         plots.ReportSection(
             "Calendar spread",
-            "The only risk that separates the two legs: daily moves of ~4 cents against ~1 USD "
-            "for each leg. Note the expiry effect: in its last three trading days (24-26 Feb "
-            "2021, inside the fixing window) Apr21 decouples and the spread drops to -1.7 USD.",
+            "The only risk that separates the two legs: daily moves of ~2 cents against ~50 cents "
+            "for each leg. Note the expiry effect: the spread jumps from -0.8 to -1.7 USD on "
+            "26 Feb 2021, the last trading day of Apr21 and a fixing day.",
             plots.fig_calendar_spread(settle, *LEGS),
         ),
         plots.ReportSection(
@@ -147,8 +147,8 @@ def run_eda(settings: Settings) -> EdaResult:
         plots.ReportSection(
             "Correlation between the legs",
             f"Rolling {CORR_WINDOW}-day and EWMA correlations stay above 0.998 until the Apr21 "
-            "expiry week, then fall towards 0.97 as the expiring contract decouples. Away from "
-            "expiry ρ is effectively 1: the basket behaves like a single future plus a spread.",
+            "expiry, then dip as the expiring contract jumps on its last day. Away from expiry "
+            "ρ is effectively 1: the basket behaves like a single future plus a spread.",
             plots.fig_correlation(
                 eda.rolling_correlation(returns, *LEGS, CORR_WINDOW),
                 eda.ewma_correlation(returns, *LEGS),
