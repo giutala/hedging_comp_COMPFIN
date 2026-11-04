@@ -86,6 +86,7 @@ required-imports = ["from __future__ import annotations"]
 "tests/**" = ["D", "ANN"]
 "notebooks/**" = ["D", "ANN", "T20", "E402"]
 "src/hedgelab/cli.py" = ["T20"]
+"scripts/build_*_notebook.py" = ["E501"]  # markdown table rows cannot be wrapped
 
 # --------------------------------------------------------------------------- mypy
 [tool.mypy]

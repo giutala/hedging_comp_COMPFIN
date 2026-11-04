@@ -14,6 +14,7 @@ from rich.table import Table
 
 from hedgelab.checkpoints import Stage, save_checkpoint
 from hedgelab.config import get_settings
+from hedgelab.eda_report import run_eda, write_eda_report
 from hedgelab.loaders import load_futures_series, load_option_quotes
 from hedgelab.log import setup_logging
 
@@ -58,6 +59,35 @@ def info() -> None:
             f"[bold]{code}[/] futures: {len(series)} days, "
             f"{series.index.min():%Y-%m-%d} -> {series.index.max():%Y-%m-%d}"
         )
+
+
+@app.command()
+def eda() -> None:
+    """Phase 0: run data-quality checks and write the EDA report (outputs/eda/)."""
+    settings = get_settings()
+    result = run_eda(settings)
+
+    table = Table(title="Data-quality checks", header_style="bold cyan")
+    for col in ("", "check", "failed / tested", "note"):
+        table.add_column(col)
+    for _, row in result.checks.iterrows():
+        if row["passed"]:
+            mark = "[green]PASS[/]"
+        elif row["severity"] == "error":
+            mark = "[bold red]FAIL[/]"
+        else:
+            mark = "[dim]info[/]"
+        table.add_row(
+            mark, str(row["check"]), f"{row['failed']:,} / {row['tested']:,}", str(row["comment"])
+        )
+    console.print(table)
+    console.print(result.return_stats.round(3).to_string())
+
+    path = write_eda_report(result, settings.output_dir / "eda" / "eda_report.html")
+    console.print(f"[bold]Report:[/] {path}")
+    blocking = ~result.checks["passed"] & (result.checks["severity"] == "error")
+    if blocking.any():
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

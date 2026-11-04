@@ -130,6 +130,62 @@ def load_futures_series(path: Path) -> dict[str, pd.DataFrame]:
     return out
 
 
+def build_futures_panel(
+    options: pd.DataFrame, futures: dict[str, pd.DataFrame], tol: float = 1e-9
+) -> pd.DataFrame:
+    """Merge futures quotes from the option file and the futures workbook.
+
+    Parameters
+    ----------
+    options : pd.DataFrame
+        Output of :func:`load_option_quotes`; each row carries its underlying's quotes.
+    futures : dict[str, pd.DataFrame]
+        Output of :func:`load_futures_series`.
+    tol : float, default 1e-9
+        Maximum tolerated price disagreement between the two sources.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long frame with columns ``date, contract, settlement, bid, ask, source``,
+        sorted by contract and date, one row per (date, contract).
+
+    Raises
+    ------
+    DataValidationError
+        If the two sources disagree on an overlapping (date, contract).
+
+    Notes
+    -----
+    The option file only carries a future while its options are alive (options expire
+    three ICE business days before the future), so the workbook supplies the last
+    trading days of the future, which fall inside the February-2021 fixing window.
+    On overlapping days the option-file value is kept after asserting both agree.
+    """
+    from_opts = (
+        options.groupby(["date", "future_contract_code"], as_index=False)
+        .agg(
+            settlement=("underlying_settlement", "first"),
+            bid=("underlying_bid", "first"),
+            ask=("underlying_ask", "first"),
+        )
+        .rename(columns={"future_contract_code": "contract"})
+        .assign(source="options")
+    )
+    frames = [from_opts]
+    for code, series in futures.items():
+        xl = series.reset_index().assign(contract=code, source="workbook")
+        overlap = xl.merge(from_opts, on=["date", "contract"], suffixes=("", "_o"))
+        for col in ("settlement", "bid", "ask"):
+            diff = (overlap[col] - overlap[f"{col}_o"]).abs().max()
+            if len(overlap) and diff > tol:
+                raise DataValidationError(f"{code} {col}: sources disagree by {diff}")
+        frames.append(xl)
+    panel = pd.concat(frames, ignore_index=True)
+    panel = panel.drop_duplicates(["date", "contract"], keep="first")
+    return panel.sort_values(["contract", "date"]).reset_index(drop=True)
+
+
 def filter_as_of(df: pd.DataFrame, as_of: date, date_col: str = "date") -> pd.DataFrame:
     """Keep only rows observable on or before ``as_of`` (D-1 temporal discipline).
 
