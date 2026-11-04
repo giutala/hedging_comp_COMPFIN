@@ -17,11 +17,6 @@ htmlcov/
 # --- secrets / local config
 .env
 
-# --- course material (not ours to redistribute; see README "Data")
-data/*.parquet
-data/*.xlsx
-data/*.csv
-notes/*.pdf
 
 # --- generated artefacts
 data/checkpoints/*
