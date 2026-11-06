@@ -48,6 +48,7 @@ The assignment text and the pricing note are in `notes/`.
 
 ```
 src/hedgelab/        library code (one module per concern)
+  contracts/         shared types and protocols between domains (jointly owned, see OWNERS.md)
   config.py          pydantic-settings, reads .env (HEDGELAB_* variables)
   exceptions.py      domain exceptions (DataLoadError, LookAheadError, ...)
   loaders.py         load + validate raw files, merge futures sources, as-of filtering
